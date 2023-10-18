@@ -8,6 +8,9 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -16,7 +19,13 @@ const (
 	SERVER_TYPE = "tcp"
 )
 
-var users []string
+var users = []string{"asdf", "asdfg"}
+
+type UserInfo struct {
+	Password string
+	IsLogin  bool
+	Lastseen string
+}
 
 type Chats struct {
 	Chat []string
@@ -27,12 +36,47 @@ func handleConnection(conn net.Conn) {
 
 	buffer := make([]byte, 1024)
 	n, err := conn.Read(buffer)
-	CheckError(err)
+	if err != nil {
+		if err == io.EOF {
+			fmt.Println("Client disconnected:", conn.RemoteAddr())
+		} else {
+			fmt.Println("Error reading from client:", err)
+		}
+		return
+	}
 
 	userInfo := strings.TrimSpace(string(buffer[:n]))
 
-	if strings.HasPrefix(userInfo, "/previouschat:") {
-		prevMessages(conn)
+	fmt.Println("UserInfo: ", userInfo)
+
+	if strings.HasPrefix(userInfo, "/userstatus:") {
+		splitResult := strings.SplitN(userInfo, ":", 2)
+		if len(splitResult) == 2 {
+			result := strings.TrimSpace(splitResult[1])
+			getUserStatus(result, conn)
+		} else {
+			fmt.Println("Invalid input format")
+		}
+	} else if strings.HasPrefix(userInfo, "/previouschat:") {
+		splitResult := strings.SplitN(userInfo, ":", 2)
+		if len(splitResult) == 2 {
+			result := strings.TrimSpace(splitResult[1])
+			ans := strings.SplitN(result, "#", 2)
+			userName := strings.TrimSpace(ans[0])
+			passWord := strings.TrimSpace(ans[1])
+			prevMessages(userName, passWord, conn)
+		} else {
+			fmt.Println("Invalid input format")
+		}
+	} else if strings.HasPrefix(userInfo, "/close:") {
+		splitResult := strings.SplitN(userInfo, ":", 2)
+		if len(splitResult) == 2 {
+			result := strings.TrimSpace(splitResult[1])
+			updateIsLoggedIn(result, conn)
+
+		} else {
+			fmt.Println("Invalid input format")
+		}
 	} else if strings.HasPrefix(userInfo, "/sendchat:") {
 		splitResult := strings.SplitN(userInfo, ":", 2)
 		if len(splitResult) == 2 {
@@ -46,9 +90,7 @@ func handleConnection(conn net.Conn) {
 		var temp []string
 		_ = json.Unmarshal([]byte(userInfo), &temp)
 
-		fmt.Println(temp)
-
-		file, err := os.Open("./userData.txt")
+		file, err := os.Open("./userData.json")
 		CheckError(err)
 		defer file.Close()
 
@@ -56,7 +98,7 @@ func handleConnection(conn net.Conn) {
 		scan.Scan()
 		line := scan.Text()
 
-		var data = make(map[string]string)
+		var data = make(map[string]UserInfo)
 
 		_ = json.Unmarshal([]byte(line), &data)
 
@@ -69,27 +111,29 @@ func handleConnection(conn net.Conn) {
 				message = "Username already exist, try to create with another username."
 				conn.Write([]byte(message))
 			} else {
-				data[temp[0]] = temp[1]
+				hash, _ := HashPassword(temp[1])
+				data[temp[0]] = UserInfo{Password: hash, IsLogin: true}
 
 				t, err := json.Marshal(data)
 				CheckError(err)
 
 				finalOut := string(t)
 
-				myfile, err := os.OpenFile("./userData.txt", os.O_CREATE|os.O_WRONLY, 0644)
+				myfile, err := os.OpenFile("./userData.json", os.O_CREATE|os.O_WRONLY, 0644)
 				CheckError(err)
 
 				_, err = io.WriteString(myfile, finalOut)
 				CheckError(err)
 
 				message = "Account created succesfully!!!!"
+
 				conn.Write([]byte(message))
 
-				myfile.Close()
 				users = append(users, temp[0])
 			}
 		} else {
-			if ok && temp[1] == data[temp[0]] {
+			match := CheckPasswordHash(temp[1], data[temp[0]].Password)
+			if ok && match {
 				message = "Login Successful"
 				conn.Write([]byte(message))
 				users = append(users, temp[0])
@@ -103,7 +147,7 @@ func handleConnection(conn net.Conn) {
 }
 
 func manageChat(message string) {
-	file, err := os.Open("./chatdata.txt")
+	file, err := os.Open("./chatdata.json")
 	CheckError(err)
 	defer file.Close()
 
@@ -143,7 +187,7 @@ func manageChat(message string) {
 
 	finalOut := string(t)
 
-	myfile, err := os.OpenFile("./chatdata.txt", os.O_CREATE|os.O_WRONLY, 0644)
+	myfile, err := os.OpenFile("./chatdata.json", os.O_CREATE|os.O_WRONLY, 0644)
 	CheckError(err)
 
 	_, err = io.WriteString(myfile, finalOut)
@@ -169,6 +213,49 @@ func main() {
 		fmt.Println()
 		go handleConnection(conn)
 	}
+}
+
+func updateIsLoggedIn(userName string, conn net.Conn) {
+	file, err := os.Open("./userData.json")
+	CheckError(err)
+	defer file.Close()
+
+	scan := bufio.NewScanner(file)
+	scan.Scan()
+	line := scan.Text()
+
+	var data = make(map[string]UserInfo)
+
+	_ = json.Unmarshal([]byte(line), &data)
+
+	mymap := data[userName]
+	mymap.IsLogin = false
+	mymap.Lastseen = time.Now().Format(time.RFC3339)
+	data[userName] = mymap
+
+	t, err := json.Marshal(data)
+	CheckError(err)
+
+	finalOut := string(t)
+
+	myfile, err := os.OpenFile("./userData.json", os.O_CREATE|os.O_WRONLY, 0644)
+	CheckError(err)
+
+	_, err = io.WriteString(myfile, finalOut)
+	CheckError(err)
+
+	var disconnectedUser string
+	for _, val := range users {
+		if val == userName {
+			disconnectedUser = val
+		}
+	}
+
+	mssg := "/anotherclientdisconnected:" + disconnectedUser
+	fmt.Println("Name: ", mssg)
+	conn.Write([]byte(mssg))
+
+	myfile.Close()
 
 }
 
@@ -178,28 +265,25 @@ func CheckError(err error) {
 	}
 }
 
-func prevMessages(conn net.Conn) {
-
-	file, err := os.Open("./chatdata.txt")
+func prevMessages(username string, password string, conn net.Conn) {
+	file, err := os.Open("./chatdata.json")
 
 	CheckError(err)
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Scan()
-	line := scanner.Text()
-
-	if err := scanner.Err(); err != nil {
-		fmt.Println(err)
+	decoder := json.NewDecoder(file)
+	var data = make(map[string]Chats)
+	if err := decoder.Decode(&data); err != nil {
+		fmt.Println("Error decoding JSON:", err)
 		return
 	}
 
-	var data = make(map[string]Chats)
-	_ = json.Unmarshal([]byte(line), &data)
+	CheckError(err)
+	defer file.Close()
 
 	opt1 := users[0] + ":" + users[1]
 	opt2 := users[1] + ":" + users[0]
-
+	fmt.Println("Username: ", username, " Password: ", password)
 	_, ok1 := data[opt1]
 	_, ok2 := data[opt2]
 
@@ -220,9 +304,90 @@ func prevMessages(conn net.Conn) {
 
 	finalOutput = "/allchat:" + finalOutput
 
-	fmt.Println("Final ", finalOutput)
-
 	_, err = conn.Write([]byte(finalOutput))
 	CheckError(err)
 
+	// Active status
+
+	myfile, err := os.Open("./userData.json")
+	CheckError(err)
+	defer file.Close()
+
+	scan := bufio.NewScanner(myfile)
+	scan.Scan()
+	line := scan.Text()
+
+	var data1 = make(map[string]UserInfo)
+
+	_ = json.Unmarshal([]byte(line), &data1)
+
+	var mymap1 = make(map[string]UserInfo)
+	mymap1 = data1
+
+	mymap1[username] = UserInfo{Password: data1[username].Password, IsLogin: true, Lastseen: ""}
+
+	t1, err := json.Marshal(mymap1)
+	CheckError(err)
+
+	finalOut := string(t1)
+
+	myfile1, err := os.OpenFile("./userData.json", os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0644)
+	CheckError(err)
+	_, err = io.WriteString(myfile1, "")
+
+	_, err = io.WriteString(myfile1, finalOut)
+	CheckError(err)
+
+}
+
+func getUserStatus(username string, conn net.Conn) {
+	file, err := os.Open("./userData.json")
+	CheckError(err)
+	defer file.Close()
+
+	scan := bufio.NewScanner(file)
+	scan.Scan()
+	line := scan.Text()
+
+	var data = make(map[string]UserInfo)
+
+	_ = json.Unmarshal([]byte(line), &data)
+
+	for _, val := range users {
+		if val != username {
+			flag := data[val].IsLogin
+			if flag {
+				finalOutput := val + " is online"
+				_, err = conn.Write([]byte(finalOutput))
+				CheckError(err)
+			} else {
+				if len(data[val].Lastseen) > 0 {
+					splitResult := strings.SplitN(data[val].Lastseen, "T", 2)
+					if len(splitResult) == 2 {
+						date := strings.TrimSpace(splitResult[0])
+						timezone := strings.TrimSpace(splitResult[1])
+						split := strings.SplitN(timezone, "+", 2)
+						time := strings.TrimSpace(split[0])
+						finalOutput := val + " is offline " + "(Lastseen : " + date + " " + time + ")"
+						_, err = conn.Write([]byte(finalOutput))
+						CheckError(err)
+
+					} else {
+						fmt.Println("Invalid input format")
+					}
+				}
+
+			}
+		}
+	}
+}
+
+func HashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	return string(bytes), err
+}
+
+func CheckPasswordHash(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
 }
