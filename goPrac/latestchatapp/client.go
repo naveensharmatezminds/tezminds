@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	SERVER_HOST = "192.168.1.41"
+	SERVER_HOST = "192.168.1.19"
 	SERVER_PORT = "9988"
 	SERVER_TYPE = "tcp"
 )
