@@ -5,6 +5,7 @@ go 1.18
 require (
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/glaukiol1/gochat v0.0.0-20220109001444-07b5cc318b0f // indirect
+	github.com/go-sql-driver/mysql v1.7.1 // indirect
 	github.com/golang/snappy v0.0.1 // indirect
 	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect

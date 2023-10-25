@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,21 +13,23 @@ import (
 )
 
 const (
-	SERVER_HOST = "192.168.1.19"
+	SERVER_HOST = "192.168.1.42"
 	SERVER_PORT = "9988"
 	SERVER_TYPE = "tcp"
 )
 
-var users = []string{"asdf", "asdfg"}
+var users []string
 
 type UserInfo struct {
-	Password string
-	IsLogin  bool
-	Lastseen string
+	Password  string
+	IsActive  bool
+	Lastseen  string
+	IpAddress string
 }
 
 type Chats struct {
-	Chat []string
+	Chat    []string
+	NewChat []string
 }
 
 func handleConnection(conn net.Conn) {
@@ -38,7 +39,7 @@ func handleConnection(conn net.Conn) {
 	n, err := conn.Read(buffer)
 	if err != nil {
 		if err == io.EOF {
-			fmt.Println("Client disconnected:", conn.RemoteAddr())
+			// fmt.Println("Client disconnected", conn.RemoteAddr())
 		} else {
 			fmt.Println("Error reading from client:", err)
 		}
@@ -47,13 +48,38 @@ func handleConnection(conn net.Conn) {
 
 	userInfo := strings.TrimSpace(string(buffer[:n]))
 
-	fmt.Println("UserInfo: ", userInfo)
-
-	if strings.HasPrefix(userInfo, "/userstatus:") {
+	if strings.HasPrefix(userInfo, "/contactlist:") {
+		splitResult := strings.SplitN(userInfo, ":", 2)
+		if len(splitResult) == 2 {
+			result := strings.TrimSpace(splitResult[1])
+			MyContactList(result, conn)
+		} else {
+			fmt.Println("Invalid input format")
+		}
+	} else if strings.HasPrefix(userInfo, "/userstatus:") {
 		splitResult := strings.SplitN(userInfo, ":", 2)
 		if len(splitResult) == 2 {
 			result := strings.TrimSpace(splitResult[1])
 			getUserStatus(result, conn)
+		} else {
+			fmt.Println("Invalid input format")
+		}
+	} else if strings.HasPrefix(userInfo, "/getport:") {
+		splitResult := strings.SplitN(userInfo, ":", 2)
+		if len(splitResult) == 2 {
+			result := strings.TrimSpace(splitResult[1])
+			GetPort(result, conn)
+		} else {
+			fmt.Println("Invalid input format")
+		}
+	} else if strings.HasPrefix(userInfo, "/connectwithuser:") {
+		splitResult := strings.SplitN(userInfo, ":", 2)
+		if len(splitResult) == 2 {
+			result := strings.TrimSpace(splitResult[1])
+			ans := strings.SplitN(result, "#", 2)
+			receiverUserName := strings.TrimSpace(ans[0])
+			senderUserName := strings.TrimSpace(ans[1])
+			ConnectWithUser(receiverUserName, senderUserName, conn)
 		} else {
 			fmt.Println("Invalid input format")
 		}
@@ -77,10 +103,21 @@ func handleConnection(conn net.Conn) {
 		} else {
 			fmt.Println("Invalid input format")
 		}
+	} else if strings.HasPrefix(userInfo, "/newchat:") {
+		splitResult := strings.SplitN(userInfo, ":", 2)
+		if len(splitResult) == 2 {
+			result := strings.TrimSpace(splitResult[1])
+			fmt.Println(result)
+			manageNewChat(result)
+
+		} else {
+			fmt.Println("Invalid input format")
+		}
 	} else if strings.HasPrefix(userInfo, "/sendchat:") {
 		splitResult := strings.SplitN(userInfo, ":", 2)
 		if len(splitResult) == 2 {
 			result := strings.TrimSpace(splitResult[1])
+			fmt.Println(result)
 			manageChat(result)
 
 		} else {
@@ -90,17 +127,18 @@ func handleConnection(conn net.Conn) {
 		var temp []string
 		_ = json.Unmarshal([]byte(userInfo), &temp)
 
-		file, err := os.Open("./userData.json")
-		CheckError(err)
-		defer file.Close()
-
-		scan := bufio.NewScanner(file)
-		scan.Scan()
-		line := scan.Text()
-
 		var data = make(map[string]UserInfo)
 
-		_ = json.Unmarshal([]byte(line), &data)
+		file, err := os.Open("./userData.json")
+		if err != nil {
+			fmt.Println("Error opening private chat file:", err)
+		}
+		defer file.Close()
+
+		decoder := json.NewDecoder(file)
+		if err := decoder.Decode(&data); err != nil {
+			fmt.Println("Error decoding private chat file:", err)
+		}
 
 		_, ok := data[temp[0]]
 
@@ -112,18 +150,22 @@ func handleConnection(conn net.Conn) {
 				conn.Write([]byte(message))
 			} else {
 				hash, _ := HashPassword(temp[1])
-				data[temp[0]] = UserInfo{Password: hash, IsLogin: true}
+				data[temp[0]] = UserInfo{Password: hash, IsActive: false, IpAddress: temp[3]}
 
-				t, err := json.Marshal(data)
-				CheckError(err)
+				// fmt.Println("Data : ", data)
 
-				finalOut := string(t)
+				file, err := os.Create("./userData.json")
+				if err != nil {
+					fmt.Println("Could not create or overwrite private chat file:", err)
+					return
+				}
+				defer file.Close()
 
-				myfile, err := os.OpenFile("./userData.json", os.O_CREATE|os.O_WRONLY, 0644)
-				CheckError(err)
-
-				_, err = io.WriteString(myfile, finalOut)
-				CheckError(err)
+				encoder := json.NewEncoder(file)
+				if err := encoder.Encode(data); err != nil {
+					fmt.Println("Error encoding private chat data:", err)
+					return
+				}
 
 				message = "Account created succesfully!!!!"
 
@@ -131,7 +173,34 @@ func handleConnection(conn net.Conn) {
 
 				users = append(users, temp[0])
 			}
-		} else {
+		} else if temp[2] == "Login" {
+			match := CheckPasswordHash(temp[1], data[temp[0]].Password)
+			if ok && match {
+				mymap := data[temp[0]]
+				mymap.IpAddress = temp[3]
+				data[temp[0]] = mymap
+
+				file, err := os.Create("./userData.json")
+				if err != nil {
+					fmt.Println("Could not create or overwrite private chat file:", err)
+					return
+				}
+				defer file.Close()
+
+				encoder := json.NewEncoder(file)
+				if err := encoder.Encode(data); err != nil {
+					fmt.Println("Error encoding private chat data:", err)
+					return
+				}
+
+				message = "Login Successful"
+				conn.Write([]byte(message))
+				users = append(users, temp[0])
+			} else {
+				message = "Invalid Credential"
+				conn.Write([]byte(message))
+			}
+		} else if temp[2] == "Loginwithsame" {
 			match := CheckPasswordHash(temp[1], data[temp[0]].Password)
 			if ok && match {
 				message = "Login Successful"
@@ -146,24 +215,209 @@ func handleConnection(conn net.Conn) {
 
 }
 
-func manageChat(message string) {
-	file, err := os.Open("./chatdata.json")
-	CheckError(err)
-	defer file.Close()
-
-	scan := bufio.NewScanner(file)
-	scan.Scan()
-	line := scan.Text()
-
+func MyContactList(username string, conn net.Conn) {
 	var data = make(map[string]Chats)
 
-	_ = json.Unmarshal([]byte(line), &data)
+	file, err := os.Open("./chatdata.json")
+	if err != nil {
+		fmt.Println("Error opening private chat file:", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&data); err != nil {
+		fmt.Println("Error decoding private chat file:", err)
+	}
+
+	var arr []string
+
+	for name, _ := range data {
+		if strings.Contains(name, username) {
+
+			splitResult := strings.SplitN(name, ":", 2)
+			if len(splitResult) == 2 {
+				name1 := strings.TrimSpace(splitResult[0])
+				name2 := strings.TrimSpace(splitResult[1])
+
+				if name1 != username {
+					arr = append(arr, name1)
+				} else if name2 != username {
+					arr = append(arr, name2)
+				}
+
+			} else {
+				fmt.Println("Invalid input format")
+			}
+			arr = append(arr)
+		}
+	}
+
+	t, err := json.Marshal(arr)
+	finalOutput := string(t)
+
+	_, err = conn.Write([]byte(finalOutput))
+	CheckError(err)
+
+}
+
+func GetPort(username string, conn net.Conn) {
+	var data = make(map[string]UserInfo)
+
+	file, err := os.Open("./userData.json")
+	if err != nil {
+		fmt.Println("Error opening private chat file:", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&data); err != nil {
+		fmt.Println("Error decoding private chat file:", err)
+	}
+
+	ipaddress := data[username].IpAddress
+
+	splitResult := strings.SplitN(ipaddress, ":", 2)
+	if len(splitResult) == 2 {
+		result := strings.TrimSpace(splitResult[1])
+		result = ":" + result
+		conn.Write([]byte(result))
+	} else {
+		fmt.Println("Invalid input format")
+	}
+}
+
+func ConnectWithUser(receiverUserName, senderUserName string, conn net.Conn) {
+	var data = make(map[string]UserInfo)
+
+	file, err := os.Open("./userData.json")
+	if err != nil {
+		fmt.Println("Error opening private chat file:", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&data); err != nil {
+		fmt.Println("Error decoding private chat file:", err)
+	}
+
+	_, ok := data[receiverUserName]
+
+	if ok {
+		ipaddress := data[receiverUserName].IpAddress
+		conn.Write([]byte(ipaddress))
+
+		// Active status
+
+		var data1 = make(map[string]UserInfo)
+
+		file, err := os.Open("./userData.json")
+		if err != nil {
+			fmt.Println("Error opening private chat file:", err)
+		}
+		defer file.Close()
+
+		decoder := json.NewDecoder(file)
+		if err := decoder.Decode(&data1); err != nil {
+			fmt.Println("Error decoding private chat file:", err)
+		}
+
+		mymap1 := data1[senderUserName]
+
+		mymap1.IsActive = true
+		mymap1.Lastseen = ""
+
+		data1[senderUserName] = mymap1
+
+		file1, err := os.Create("./userData.json")
+		if err != nil {
+			fmt.Println("Could not create or overwrite private chat file:", err)
+			return
+		}
+		defer file1.Close()
+
+		encoder := json.NewEncoder(file1)
+		if err := encoder.Encode(data1); err != nil {
+			fmt.Println("Error encoding private chat data:", err)
+			return
+		}
+	} else {
+		conn.Write([]byte("Username not exist!"))
+	}
+
+}
+func manageNewChat(message string) {
+	var data = make(map[string]Chats)
+
+	file, err := os.Open("./chatdata.json")
+	if err != nil {
+		fmt.Println("Error opening private chat file:", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&data); err != nil {
+		fmt.Println("Error decoding private chat file:", err)
+	}
 
 	opt1 := users[0] + ":" + users[1]
 	opt2 := users[1] + ":" + users[0]
 
 	if len(data) == 0 {
-		data[opt1] = Chats{Chat: []string{message}}
+		data[opt1] = Chats{Chat: []string{}, NewChat: []string{}}
+	} else {
+		_, ok1 := data[opt1]
+		_, ok2 := data[opt2]
+
+		if ok1 {
+			mydata := data[opt1]
+			mydata.NewChat = append(mydata.NewChat, message)
+			mydata.Chat = append(mydata.Chat, message)
+			data[opt1] = mydata
+		} else if ok2 {
+			mydata := data[opt2]
+			mydata.NewChat = append(mydata.NewChat, message)
+			mydata.Chat = append(mydata.Chat, message)
+			data[opt2] = mydata
+		} else {
+			mydata := data[opt1]
+			mydata.NewChat = append(mydata.NewChat, message)
+			mydata.Chat = append(mydata.Chat, message)
+			data[opt1] = mydata
+		}
+	}
+	file1, err := os.Create("./chatdata.json")
+	if err != nil {
+		fmt.Println("Could not create or overwrite private chat file:", err)
+		return
+	}
+	defer file1.Close()
+
+	encoder := json.NewEncoder(file1)
+	if err := encoder.Encode(data); err != nil {
+		fmt.Println("Error encoding private chat data:", err)
+		return
+	}
+}
+
+func manageChat(message string) {
+	var data = make(map[string]Chats)
+
+	file, err := os.Open("./chatdata.json")
+	if err != nil {
+		fmt.Println("Error opening private chat file:", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&data); err != nil {
+		fmt.Println("Error decoding private chat file:", err)
+	}
+
+	opt1 := users[0] + ":" + users[1]
+	opt2 := users[1] + ":" + users[0]
+
+	if len(data) == 0 {
+		data[opt1] = Chats{Chat: []string{message}, NewChat: []string{}}
 	} else {
 		_, ok1 := data[opt1]
 		_, ok2 := data[opt2]
@@ -182,18 +436,18 @@ func manageChat(message string) {
 			data[opt1] = mydata
 		}
 	}
-	t, err := json.Marshal(data)
-	CheckError(err)
+	file1, err := os.Create("./chatdata.json")
+	if err != nil {
+		fmt.Println("Could not create or overwrite private chat file:", err)
+		return
+	}
+	defer file1.Close()
 
-	finalOut := string(t)
-
-	myfile, err := os.OpenFile("./chatdata.json", os.O_CREATE|os.O_WRONLY, 0644)
-	CheckError(err)
-
-	_, err = io.WriteString(myfile, finalOut)
-	CheckError(err)
-
-	myfile.Close()
+	encoder := json.NewEncoder(file1)
+	if err := encoder.Encode(data); err != nil {
+		fmt.Println("Error encoding private chat data:", err)
+		return
+	}
 
 }
 
@@ -216,38 +470,42 @@ func main() {
 }
 
 func updateIsLoggedIn(userName string, conn net.Conn) {
-	file, err := os.Open("./userData.json")
-	CheckError(err)
-	defer file.Close()
-
-	scan := bufio.NewScanner(file)
-	scan.Scan()
-	line := scan.Text()
-
 	var data = make(map[string]UserInfo)
 
-	_ = json.Unmarshal([]byte(line), &data)
+	file, err := os.Open("./userData.json")
+	if err != nil {
+		fmt.Println("Error opening private chat file:", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&data); err != nil {
+		fmt.Println("Error decoding private chat file:", err)
+	}
 
 	mymap := data[userName]
-	mymap.IsLogin = false
+	mymap.IsActive = false
 	mymap.Lastseen = time.Now().Format(time.RFC3339)
 	data[userName] = mymap
 
-	t, err := json.Marshal(data)
-	CheckError(err)
+	file1, err := os.Create("./userData.json")
+	if err != nil {
+		fmt.Println("Could not create or overwrite private chat file:", err)
+		return
+	}
+	defer file1.Close()
 
-	finalOut := string(t)
-
-	myfile, err := os.OpenFile("./userData.json", os.O_CREATE|os.O_WRONLY, 0644)
-	CheckError(err)
-
-	_, err = io.WriteString(myfile, finalOut)
-	CheckError(err)
+	encoder := json.NewEncoder(file1)
+	if err := encoder.Encode(data); err != nil {
+		fmt.Println("Error encoding private chat data:", err)
+		return
+	}
 
 	var disconnectedUser string
 	for _, val := range users {
 		if val == userName {
 			disconnectedUser = val
+			break
 		}
 	}
 
@@ -255,13 +513,12 @@ func updateIsLoggedIn(userName string, conn net.Conn) {
 	fmt.Println("Name: ", mssg)
 	conn.Write([]byte(mssg))
 
-	myfile.Close()
-
 }
 
 func CheckError(err error) {
 	if err != nil {
-		panic(err)
+		fmt.Println("Error is : ", err)
+		return
 	}
 }
 
@@ -307,57 +564,27 @@ func prevMessages(username string, password string, conn net.Conn) {
 	_, err = conn.Write([]byte(finalOutput))
 	CheckError(err)
 
-	// Active status
-
-	myfile, err := os.Open("./userData.json")
-	CheckError(err)
-	defer file.Close()
-
-	scan := bufio.NewScanner(myfile)
-	scan.Scan()
-	line := scan.Text()
-
-	var data1 = make(map[string]UserInfo)
-
-	_ = json.Unmarshal([]byte(line), &data1)
-
-	var mymap1 = make(map[string]UserInfo)
-	mymap1 = data1
-
-	mymap1[username] = UserInfo{Password: data1[username].Password, IsLogin: true, Lastseen: ""}
-
-	t1, err := json.Marshal(mymap1)
-	CheckError(err)
-
-	finalOut := string(t1)
-
-	myfile1, err := os.OpenFile("./userData.json", os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0644)
-	CheckError(err)
-	_, err = io.WriteString(myfile1, "")
-
-	_, err = io.WriteString(myfile1, finalOut)
-	CheckError(err)
-
 }
 
 func getUserStatus(username string, conn net.Conn) {
-	file, err := os.Open("./userData.json")
-	CheckError(err)
-	defer file.Close()
-
-	scan := bufio.NewScanner(file)
-	scan.Scan()
-	line := scan.Text()
-
 	var data = make(map[string]UserInfo)
 
-	_ = json.Unmarshal([]byte(line), &data)
+	file, err := os.Open("./userData.json")
+	if err != nil {
+		fmt.Println("Error opening private chat file:", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&data); err != nil {
+		fmt.Println("Error decoding private chat file:", err)
+	}
 
 	for _, val := range users {
 		if val != username {
-			flag := data[val].IsLogin
+			flag := data[val].IsActive
 			if flag {
-				finalOutput := val + " is online"
+				finalOutput := val + " (online)"
 				_, err = conn.Write([]byte(finalOutput))
 				CheckError(err)
 			} else {
@@ -368,7 +595,7 @@ func getUserStatus(username string, conn net.Conn) {
 						timezone := strings.TrimSpace(splitResult[1])
 						split := strings.SplitN(timezone, "+", 2)
 						time := strings.TrimSpace(split[0])
-						finalOutput := val + " is offline " + "(Lastseen : " + date + " " + time + ")"
+						finalOutput := val + " (offline) " + "(lastseen : " + date + " " + time + ")"
 						_, err = conn.Write([]byte(finalOutput))
 						CheckError(err)
 
