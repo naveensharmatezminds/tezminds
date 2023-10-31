@@ -1,0 +1,136 @@
+API implemented in Go, using Gorilla Mux for routing and MySQL as the database.
+API performs basic CRUD operations for User Entity.
+Schema Used:
+
+The MySQL database schema for the `users` table is as follows:
+
+MySQL
+CREATE TABLE users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    fullname VARCHAR(255) NOT NULL,
+    isactive BOOLEAN NOT NULL,
+    lastseen DATETIME,
+    created_at DATETIME NOT NULL,
+    mobile_no BIGINT,
+    bio TEXT,
+    gender VARCHAR(10),
+    updated_at DATETIME
+);
+
+
+Logic Explanation:
+
+Database Connection:
+   - The application reads database credentials from the `.env` file and establishes a connection to the MySQL database using mysql ( `github.com/go-sql-driver/mysql` ) driver.
+
+API Endpoints:
+   - GET `/users`:
+     - Retrieves a list of all users from the database.
+
+   - GET `/user/{username}`:
+     - Fetches user details based on the provided username.
+
+   - POST `/user`:
+     - Adds a new user to the database.
+     - Validates the request data, ensuring a strong password, valid username, mobile number, and gender.
+
+   - PUT `/user/{username}`:
+     - Updates an existing user's information based on the provided username.
+     - Validates and sanitizes the input data before updating the user.
+
+   - DELETE `/user/{username}`:
+     - Deletes a user from the database based on the provided username.
+
+Data Validation and Error Handling:
+   - Data Validation in Post Api 
+   - Error responses appropriate error codes and messages.
+    {
+	ErrCode      1    
+	Error        "Error message"
+	ResponseUser null
+    }
+
+Response Format:
+   - The API responses are structured in a consistent format, using a `UserResponse` struct containing `errorCode`, `errorMessage`, and `data`.
+   - The `data` field contains either a single `ResponseUser` object or a list of `ResponseUser` objects, depending on the API endpoint.
+
+Existing API Endpoints:
+
+ 1. Get All Users:
+- URL: `/users`
+- Method: GET
+- Description: Get a list of all users.
+{
+	ErrCode      0    
+	Error        ""
+	ResponseUser list of all users from the database.
+}
+
+ 2. Get User by Username:
+- URL: `/user/{username}`
+- Method: GET
+- Description: Get user details by username.
+{
+	ErrCode      0    
+	Error        ""
+	ResponseUser User object.
+}
+
+
+ 3. Add User:
+- URL: `/user`
+- Method: POST
+- Description: Add a new user.
+- Request Body Example:
+  json
+  {
+    "username": "naveen1999",
+    "password": "Naveen@1999",
+    "fullname": "Naveen Sharma",
+    "isactive": true,
+    "mobile_no": 9876543210,
+    "bio": "developer",
+    "gender": "Male"
+  }
+
+{
+	ErrCode      0    
+	Error        ""
+	ResponseUser Added User object.
+}
+
+4. Update User:
+- URL: `/user/{username}`
+- Method: PUT
+- Description: Update an existing user by username.
+- Request Body Example:
+  json
+  {
+    "username": "naveen1999",
+    "password": "NewPassword@123",
+    "fullname": "Naveen Sharma",
+    "isactive": true,
+    "mobile_no": 9876543210,
+    "bio": "developer",
+    "gender": "Male"
+  }
+
+{
+	ErrCode      0    
+	Error        ""
+	ResponseUser Updated User object.
+}
+  
+
+ 5. Delete User:
+- URL: `/user/{username}`
+- Method: DELETE
+- Description: Delete a user by username.
+
+{
+	ErrCode      0    
+	Error        ""
+	ResponseUser Deleted User object.
+}
