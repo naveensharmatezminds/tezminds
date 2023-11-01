@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 )
@@ -54,6 +55,17 @@ type UserResponse struct {
 	Data         interface{} `json:"data"`
 }
 
+type getAllUsersResponse struct {
+	ErrorCode    int         `json:"errorCode"`
+	ErrorMessage string      `json:"errorMessage"`
+	Data         interface{} `json:"data"`
+}
+
+type getAllUsersData struct {
+	Count   int         `json:"count"`
+	Records interface{} `json:"records"`
+}
+
 func init() {
 	if err := godotenv.Load(); err != nil {
 		log.Fatal("Error loading .env file")
@@ -78,10 +90,19 @@ func init() {
 	}
 }
 
+// http.HandleFunc("/login", Login)
+// http.HandleFunc("/home", Home)
+
 func main() {
 	r := mux.NewRouter()
+	// r.HandleFunc("/login", Login).Methods("GET")
+	// r.HandleFunc("/home", Home).Methods("GET")
+	r.HandleFunc("/signin", Signin).Methods("POST")
 	r.HandleFunc("/users", getAllUsers).Methods("GET")
+
+	r.HandleFunc("/allusers", getAllUsersRecord).Methods("GET")
 	r.HandleFunc("/user/{username}", getUser).Methods("GET")
+
 	r.HandleFunc("/user", addUser).Methods("POST")
 	r.HandleFunc("/user/{username}", updateUser).Methods("PUT")
 	r.HandleFunc("/user/{username}", deleteUser).Methods("DELETE")
@@ -606,6 +627,10 @@ func getUser(w http.ResponseWriter, r *http.Request) {
 	username := vars["username"]
 
 	row := db.QueryRow("SELECT * FROM users WHERE username = ?", username)
+	scanRows(w, r, row)
+}
+
+func scanRows(w http.ResponseWriter, r *http.Request, row *sql.Row) {
 	var user User
 
 	var lastseen []uint8
@@ -708,3 +733,254 @@ func isValidGender(gender string) bool {
 	}
 	return secure
 }
+
+func getAllUsersRecord(w http.ResponseWriter, r *http.Request) {
+
+	isQuery := r.URL.Query()
+	if len(isQuery) == 0 {
+		rows, err := db.Query("SELECT * FROM users ")
+		if err != nil {
+			response := UserResponse{
+				ErrorCode:    1,
+				ErrorMessage: err.Error(),
+				Data:         nil,
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		defer rows.Close()
+
+		count := 0
+		var users []ResponseUser
+		for rows.Next() {
+			var user User
+			count++
+
+			var lastseen []uint8
+			// var createdat []uint8
+			// var updatedat []uint8
+			err := rows.Scan(
+				&user.ID, &user.Username, &user.Password, &user.FullName, &user.IsActive,
+				&lastseen, &user.CreatedAt, &user.MobileNo, &user.Bio, &user.Gender, &user.UpdatedAt,
+			)
+
+			user.Lastseen, _ = time.Parse("2006-01-02 15:04:05", string(lastseen))
+			// user.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", string(createdat))
+			// user.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", string(updatedat))
+
+			resUser := ResponseUser{
+				ID:        user.ID,
+				Username:  user.Username,
+				FullName:  user.FullName,
+				IsActive:  user.IsActive,
+				Lastseen:  user.Lastseen,
+				CreatedAt: user.CreatedAt,
+				MobileNo:  user.MobileNo,
+				Bio:       user.Bio,
+				Gender:    user.Gender,
+				UpdatedAt: user.UpdatedAt,
+			}
+
+			if err != nil {
+				response := UserResponse{
+					ErrorCode:    1,
+					ErrorMessage: err.Error(),
+					Data:         nil,
+				}
+				json.NewEncoder(w).Encode(response)
+				return
+			}
+			users = append(users, resUser)
+
+		}
+		if len(users) == 0 {
+			response := UserResponse{
+				ErrorCode:    0,
+				ErrorMessage: "Database is Empty!",
+				Data:         users,
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		// response := UserResponse{
+		// 	ErrorCode:    0,
+		// 	ErrorMessage: "",
+		// 	Data:         users,
+		// }
+
+		getAllUsersData := getAllUsersData{
+			Count:   len(users),
+			Records: users,
+		}
+
+		getAllUsersResponse := getAllUsersResponse{
+			ErrorCode:    0,
+			ErrorMessage: "",
+			Data:         getAllUsersData,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(getAllUsersResponse)
+	} else {
+		searchQuery := r.URL.Query().Get("search")
+		start := r.URL.Query().Get("start") // Current page number
+		limit := r.URL.Query().Get("limit") // Number of items per page
+
+		if start == "" {
+			start = "1"
+		}
+		if limit == "" {
+			limit = "10"
+		}
+
+		startInt, err := strconv.Atoi(start)
+		if err != nil {
+			response := UserResponse{
+				ErrorCode:    1,
+				ErrorMessage: err.Error(),
+				Data:         nil,
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		limitInt, err := strconv.Atoi(limit)
+		if err != nil {
+			response := UserResponse{
+				ErrorCode:    1,
+				ErrorMessage: err.Error(),
+				Data:         nil,
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		query := "SELECT id, username, fullname, isactive, mobile_no, bio, gender FROM users WHERE " +
+			"username LIKE ? OR fullname LIKE ? OR isactive LIKE ? OR mobile_no LIKE ? OR bio LIKE ? OR gender LIKE ? " +
+			"LIMIT ? OFFSET ?"
+
+		rows, err := db.Query(query, "%"+searchQuery+"%", "%"+searchQuery+"%", "%"+searchQuery+"%", "%"+searchQuery+"%", "%"+searchQuery+"%", "%"+searchQuery+"%", limitInt, startInt-1)
+
+		if err != nil {
+			response := UserResponse{
+				ErrorCode:    1,
+				ErrorMessage: err.Error(),
+				Data:         nil,
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		defer rows.Close()
+
+		var users []ResponseUser
+		for rows.Next() {
+			var user ResponseUser
+			err := rows.Scan(&user.ID, &user.Username, &user.FullName, &user.IsActive, &user.MobileNo, &user.Bio, &user.Gender)
+			if err != nil {
+				response := UserResponse{
+					ErrorCode:    1,
+					ErrorMessage: err.Error(),
+					Data:         nil,
+				}
+				json.NewEncoder(w).Encode(response)
+				return
+			}
+			users = append(users, user)
+		}
+		response := UserResponse{
+			ErrorCode:    0,
+			ErrorMessage: "",
+			Data:         users,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}
+
+}
+
+//cookie authentication
+
+// this map stores the users sessions. For larger scale applications, you can use a database or cache for this purpose
+var sessions = map[string]session{}
+
+// each session contains the username of the user and the time at which it expires
+type session struct {
+	username string
+	expiry   time.Time
+}
+
+// we'll use this method later to determine if the session has expired
+func (s session) isExpired() bool {
+	return s.expiry.Before(time.Now())
+}
+
+type Credentials struct {
+	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+func Signin(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("in sign in")
+	var creds Credentials
+
+	er := json.NewDecoder(r.Body).Decode(&creds)
+	if er != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	enteredUsername := creds.Username
+	enteredPassword := creds.Password
+
+	row := db.QueryRow("SELECT * FROM users WHERE username = ?", enteredUsername)
+
+	var user User
+
+	var lastseen []uint8
+	// var createdat []uint8
+	// var updatedat []uint8
+
+	err := row.Scan(
+		&user.ID, &user.Username, &user.Password, &user.FullName, &user.IsActive,
+		&lastseen, &user.CreatedAt, &user.MobileNo, &user.Bio, &user.Gender, &user.UpdatedAt,
+	)
+	if err != nil {
+		response := UserResponse{
+			ErrorCode:    1,
+			ErrorMessage: "No such user found!",
+			Data:         nil,
+		}
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	user.Lastseen, _ = time.Parse("2006-01-02 15:04:05", string(lastseen))
+
+	// expectedPassword, ok :=
+
+	password := user.Password
+
+	if password != enteredPassword {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	sessionToken := uuid.NewString()
+	expiresAt := time.Now().Add(120 * time.Second)
+
+	sessions[sessionToken] = session{
+		username: creds.Username,
+		expiry:   expiresAt,
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:    "session_token",
+		Value:   sessionToken,
+		Expires: expiresAt,
+	})
+}
+
+// func welcome(w http.ResponseWriter, r *http.Request){
+
+// }
